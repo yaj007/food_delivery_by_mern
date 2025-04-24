@@ -1,3 +1,4 @@
+
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
@@ -42,6 +43,40 @@ const authenticateToken = (req, res, next) => {
         next();
     });
 };
+
+// Define FoodItem Schema and Model
+const foodItemSchema = new mongoose.Schema({
+    name: {
+        type: String,
+        required: true,
+    },
+    description: {
+        type: String,
+        required: true,
+    },
+    price: {
+        type: Number,
+        required: true,
+    },
+    category: {
+        type: String,
+        required: true,
+    },
+    image: {
+        type: String,
+        default: "https://via.placeholder.com/150",
+    },
+    isAvailable: {
+        type: Boolean,
+        default: true,
+    },
+    createdAt: {
+        type: Date,
+        default: Date.now,
+    },
+});
+
+const FoodItem = mongoose.model("FoodItem", foodItemSchema);
 
 // Routes
 
@@ -144,4 +179,186 @@ app.get("/profile", async (req, res) => {
         console.error(error);
         res.status(500).json({ error: 'Internal Server Error' });
     }
-  });
+});
+
+//FOOD ITEM ROUTES
+
+// Get all food items
+app.get('/food-items', async (req, res) => {
+    try {
+        const foodItems = await FoodItem.find();
+        res.status(200).json(foodItems);
+    } catch (error) {
+        console.error('Error fetching food items:', error);
+        res.status(500).json({ error: 'Unable to get food items' });
+    }
+});
+
+// Get a single food item by ID
+app.get('/food-items/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const foodItem = await FoodItem.findById(id);
+        
+        if (!foodItem) {
+            return res.status(404).json({ error: 'Food item not found' });
+        }
+        
+        res.status(200).json(foodItem);
+    } catch (error) {
+        console.error('Error fetching food item:', error);
+        res.status(500).json({ error: 'Unable to get food item' });
+    }
+});
+
+
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+
+// Create uploads directory if it doesn't exist
+const uploadDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadDir)) {
+    fs.mkdirSync(uploadDir, { recursive: true });
+}
+
+// Configure multer storage
+const storage = multer.diskStorage({
+    destination: function (req, file, cb) {
+        cb(null, 'uploads/');
+    },
+    filename: function (req, file, cb) {
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+        const ext = path.extname(file.originalname);
+        cb(null, file.fieldname + '-' + uniqueSuffix + ext);
+    }
+});
+
+// File filter to accept only images
+const fileFilter = (req, file, cb) => {
+    if (file.mimetype.startsWith('image/')) {
+        cb(null, true);
+    } else {
+        cb(new Error('Not an image! Please upload only images.'), false);
+    }
+};
+
+const upload = multer({ 
+    storage: storage,
+    fileFilter: fileFilter,
+    limits: {
+        fileSize: 5 * 1024 * 1024 // 5MB limit
+    }
+});
+
+// Serve static files from the uploads directory
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
+// Modify the food item POST route to handle file uploads
+app.post('/food-items', authenticateToken, upload.single('image'), async (req, res) => {
+    try {
+        const { name, description, price, category } = req.body;
+
+        if (!name || !description || !price || !category) {
+            return res.status(400).json({ error: 'Name, description, price, and category are required' });
+        }
+
+        // Create image URL from uploaded file or use default
+        let imageUrl = 'https://via.placeholder.com/150';
+        if (req.file) {
+            imageUrl = `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;
+        }
+
+        const newFoodItem = new FoodItem({
+            name,
+            description,
+            price: parseFloat(price),
+            category,
+            image: imageUrl,
+        });
+
+        await newFoodItem.save();
+        res.status(201).json({ message: 'Food item added successfully', foodItem: newFoodItem });
+    } catch (error) {
+        console.error('Error adding food item:', error);
+        res.status(500).json({ error: 'Error adding food item' });
+    }
+});
+
+// Modify the food item PUT route to handle file uploads
+app.put('/food-items/:id', authenticateToken, upload.single('image'), async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { name, description, price, category, isAvailable } = req.body;
+
+        // Find the existing food item
+        const foodItem = await FoodItem.findById(id);
+        if (!foodItem) {
+            return res.status(404).json({ error: 'Food item not found' });
+        }
+
+        // Update image if a new one is uploaded
+        let imageUrl = foodItem.image;
+        if (req.file) {
+            imageUrl = `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;
+            
+            // Delete old image if it's not the default and it's in our uploads folder
+            if (foodItem.image && foodItem.image.includes('/uploads/')) {
+                const oldImagePath = foodItem.image.split('/uploads/')[1];
+                if (oldImagePath) {
+                    const fullPath = path.join(uploadDir, oldImagePath);
+                    if (fs.existsSync(fullPath)) {
+                        fs.unlinkSync(fullPath);
+                    }
+                }
+            }
+        }
+
+        const updatedFoodItem = await FoodItem.findByIdAndUpdate(
+            id,
+            { 
+                name, 
+                description, 
+                price: parseFloat(price), 
+                category, 
+                image: imageUrl,
+                isAvailable: isAvailable === 'true' || isAvailable === true
+            },
+            { new: true }
+        );
+
+        res.status(200).json({ message: 'Food item updated successfully', foodItem: updatedFoodItem });
+    } catch (error) {
+        console.error('Error updating food item:', error);
+        res.status(500).json({ error: 'Error updating food item' });
+    }
+});
+
+// Modify the DELETE route to also delete the image file
+app.delete('/food-items/:id', authenticateToken, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const foodItem = await FoodItem.findById(id);
+        
+        if (!foodItem) {
+            return res.status(404).json({ error: 'Food item not found' });
+        }
+        
+        // Delete the image file if it's in our uploads folder
+        if (foodItem.image && foodItem.image.includes('/uploads/')) {
+            const imagePath = foodItem.image.split('/uploads/')[1];
+            if (imagePath) {
+                const fullPath = path.join(uploadDir, imagePath);
+                if (fs.existsSync(fullPath)) {
+                    fs.unlinkSync(fullPath);
+                }
+            }
+        }
+        
+        const deletedFoodItem = await FoodItem.findByIdAndDelete(id);
+        res.status(200).json({ message: 'Food item deleted successfully' });
+    } catch (error) {
+        console.error('Error deleting food item:', error);
+        res.status(500).json({ error: 'Error deleting food item' });
+    }
+});
