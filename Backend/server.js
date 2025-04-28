@@ -74,9 +74,16 @@ const foodItemSchema = new mongoose.Schema({
         type: Date,
         default: Date.now,
     },
+    rating: {  // Add this field
+        type: Number,
+        min: 1,
+        max: 5,
+        default: 3,  // Default rating is 3
+    }
 });
 
 const FoodItem = mongoose.model("FoodItem", foodItemSchema);
+
 
 // Routes
 
@@ -183,10 +190,26 @@ app.get("/profile", async (req, res) => {
 
 //FOOD ITEM ROUTES
 
-// Get all food items
+// Get all food items with filtering options
 app.get('/food-items', async (req, res) => {
     try {
-        const foodItems = await FoodItem.find();
+        const { category, priceSort, rating } = req.query;
+        
+        // Build the filter object
+        let filter = {};
+        
+        if (category && category !== 'All') {
+            filter.category = category;
+        }
+
+        if (rating) {
+            filter.rating = { $gte: parseFloat(rating) };  // Filter by rating
+        }
+
+        // Get the food items, optionally sorted by price
+        const foodItems = await FoodItem.find(filter)
+            .sort(priceSort === 'asc' ? { price: 1 } : priceSort === 'desc' ? { price: -1 } : {});
+        
         res.status(200).json(foodItems);
     } catch (error) {
         console.error('Error fetching food items:', error);
@@ -400,4 +423,21 @@ app.put('/profile', authenticateToken, async (req, res) => {
         console.error(error);
         res.status(500).json({ error: 'Error updating profile' });
     }
+});
+
+
+// Get all food items
+app.get('/food-items', async (req, res) => {
+    try {
+        const foodItems = await FoodItem.find();
+        res.status(200).json(foodItems);
+    } catch (error) {
+        console.error('Error fetching food items:', error);
+        res.status(500).json({ error: 'Unable to get food items' });
+    }
+});
+
+// Add this search route here
+app.get('/food-items/search', async (req, res) => {
+    // The search route code goes here (as shown above)
 });
